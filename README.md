@@ -32,6 +32,17 @@ A comprehensive end-to-end DNA-based disease prediction system using machine lea
 - ⚠️ **Medical Disclaimer**: Clear educational purpose statement
 - 🧪 **Sample Sequences**: Quick test with pre-loaded examples
 
+## Screenshots
+
+### Home Page
+![Home Page](https://github.com/user-attachments/assets/d470828b-b114-48a3-8ddf-16e1c5908921)
+
+### Prediction Results
+![Prediction Results](https://github.com/user-attachments/assets/be56839f-9a5f-4824-8169-3f79266f6b81)
+
+### Prediction History
+![Prediction History](https://github.com/user-attachments/assets/5e2f7aff-8cb4-4263-887c-d39a76e3ce66)
+
 ## Project Structure
 
 ```
@@ -67,30 +78,42 @@ DNA-disease/
 - Python 3.8 or higher
 - pip package manager
 
-### Step 1: Clone the Repository
+### Quick Start (Recommended)
+```bash
+# Clone the repository
+git clone https://github.com/nithishvaduganathan/DNA-disease.git
+cd DNA-disease
+
+# Run the quick start script (handles everything automatically)
+bash start.sh
+```
+
+The application will be available at: `http://localhost:5000`
+
+### Manual Setup
+
+#### Step 1: Clone the Repository
 ```bash
 git clone https://github.com/nithishvaduganathan/DNA-disease.git
 cd DNA-disease
 ```
 
-### Step 2: Install Dependencies
+#### Step 2: Install Dependencies
 ```bash
 pip install -r requirements.txt
 ```
 
-### Step 3: Generate Dataset (Optional)
-If you want to regenerate the training dataset:
+#### Step 3: Generate Dataset
 ```bash
 python data/generate_dataset.py
 ```
 
-### Step 4: Train the Model (Optional)
-If you want to retrain the model:
+#### Step 4: Train the Model
 ```bash
 python model/train_model.py
 ```
 
-### Step 5: Run the Application
+#### Step 5: Run the Application
 ```bash
 python app.py
 ```
