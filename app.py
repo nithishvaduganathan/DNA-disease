@@ -1,60 +1,81 @@
 """
-DNA Disease Prediction Flask Application
-Main application file with routes and prediction logic
+DNA Disease Risk Prediction – Flask Application
+Uses ensemble (XGBoost + LightGBM) model trained on synthetic_dna_dataset.csv
+Target: Disease_Risk (High / Medium / Low)
 """
 
 from flask import Flask, render_template, request, jsonify, send_file
 import joblib
 import os
+import numpy as np
+import pandas as pd
 from datetime import datetime
 import sqlite3
 from io import BytesIO
-from reportlab.lib.pagesizes import letter
-from reportlab.lib import colors
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-from reportlab.lib.units import inch
+
+try:
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib import colors as rl_colors
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.lib.units import inch
+    HAS_REPORTLAB = True
+except ImportError:
+    HAS_REPORTLAB = False
 
 from utils.validator import (
-    validate_dna_sequence, 
-    clean_dna_sequence, 
+    validate_dna_sequence,
+    clean_dna_sequence,
     parse_fasta,
     get_sequence_stats
 )
 from utils.preprocessing import sequence_to_kmer_string
 
 app = Flask(__name__)
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16 MB
 app.config['UPLOAD_FOLDER'] = '/tmp/uploads'
-
-# Create upload folder if it doesn't exist
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
-# Load model and vectorizer
-MODEL_PATH = 'model/disease_model.pkl'
+# ── Paths ──────────────────────────────────────────────────────────────────────
+MODEL_PATH      = 'model/disease_model.pkl'
 VECTORIZER_PATH = 'model/vectorizer.pkl'
-DB_PATH = 'predictions.db'
+DB_PATH         = 'predictions.db'
 
-model = None
-vectorizer = None
+# Global artifacts (loaded at startup)
+artifacts = None   # full dict saved by train_model.py
 
 
-def load_model_and_vectorizer():
-    """Load the trained model and vectorizer"""
-    global model, vectorizer
-    
-    if os.path.exists(MODEL_PATH) and os.path.exists(VECTORIZER_PATH):
-        model = joblib.load(MODEL_PATH)
-        vectorizer = joblib.load(VECTORIZER_PATH)
-        print("Model and vectorizer loaded successfully!")
-        return True
+# ── Load model ─────────────────────────────────────────────────────────────────
+
+def load_model():
+    """Load the trained model artifacts."""
+    global artifacts
+    if os.path.exists(MODEL_PATH):
+        try:
+            loaded = joblib.load(MODEL_PATH)
+            if isinstance(loaded, dict) and 'model' in loaded:
+                artifacts = loaded
+                print("✓ New-format model loaded successfully!")
+                print(f"  Classes: {artifacts.get('classes')}")
+                print(f"  Test accuracy: {artifacts.get('accuracy', 0)*100:.1f}%")
+                return True
+            else:
+                # Backward-compatible old model (plain sklearn estimator)
+                artifacts = {'model': loaded, 'classes': None,
+                             'label_encoder': None, 'scaler': None,
+                             'kmer_vectorizer': None, 'has_sequence': True}
+                print("✓ Legacy model loaded (k-mer only mode)")
+                return True
+        except Exception as e:
+            print(f"✗ Failed to load model: {e}")
     else:
-        print("Model or vectorizer not found. Please train the model first.")
-        return False
+        print("✗ Model not found — please run: python model/train_model.py")
+    return False
 
+
+# ── Database ───────────────────────────────────────────────────────────────────
 
 def init_database():
-    """Initialize SQLite database for prediction history"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('''
@@ -63,298 +84,326 @@ def init_database():
             timestamp TEXT,
             sequence_length INTEGER,
             gc_content REAL,
-            predicted_disease TEXT,
+            predicted_risk TEXT,
             confidence REAL,
-            risk_level TEXT
+            class_label TEXT
         )
     ''')
     conn.commit()
     conn.close()
 
 
-def save_prediction_to_db(sequence_length, gc_content, disease, confidence, risk_level):
-    """Save prediction to database"""
+def save_prediction(seq_len, gc, risk, confidence, class_label='N/A'):
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute('''
-            INSERT INTO predictions (timestamp, sequence_length, gc_content, predicted_disease, confidence, risk_level)
+            INSERT INTO predictions
+                (timestamp, sequence_length, gc_content, predicted_risk, confidence, class_label)
             VALUES (?, ?, ?, ?, ?, ?)
-        ''', (datetime.now().isoformat(), sequence_length, gc_content, disease, confidence, risk_level))
+        ''', (datetime.now().isoformat(), seq_len, gc, risk, confidence, class_label))
         conn.commit()
         conn.close()
     except Exception as e:
-        print(f"Error saving to database: {e}")
+        print(f"DB error: {e}")
 
 
-def classify_risk_level(confidence):
-    """Classify risk level based on confidence score"""
-    if confidence >= 0.7:
-        return "High"
-    elif confidence >= 0.4:
-        return "Medium"
+# ── Feature extraction ────────────────────────────────────────────────────────
+
+def build_feature_row(stats, sequence, class_label='Human'):
+    """
+    Build a numeric feature row that EXACTLY matches the training schema in
+    train_model.py::extract_numeric_features() — 23 hand-crafted features.
+    """
+    from scipy.sparse import hstack, csr_matrix
+
+    a = int(stats.get('a_count', 0))
+    t = int(stats.get('t_count', 0))
+    c = int(stats.get('c_count', 0))
+    g = int(stats.get('g_count', 0))
+    gc_content = float(stats.get('gc_content', (g + c) / max(a+t+c+g,1) * 100))
+    at_content = 100.0 - gc_content
+    kmer_3_freq   = 0.5      # sensible default for unknown sequences
+    mutation_flag = 0        # unknown → assume no mutation
+
+    # Encode class label with the same LabelEncoder used at training
+    le_class = artifacts.get('class_label_encoder')
+    known_classes = list(le_class.classes_) if le_class is not None else \
+                    ['Bacteria', 'Human', 'Plant', 'Virus']
+    if class_label not in known_classes:
+        class_label = 'Human'
+    class_enc = int(le_class.transform([class_label])[0]) if le_class is not None \
+                else known_classes.index(class_label)
+
+    # ── Engineered features (must match train_model.py order) ──────────────
+    eps = 1e-6
+    at_gc_ratio      = at_content    / (gc_content   + eps)
+    a_t_ratio        = a             / (t             + eps)
+    c_g_ratio        = c             / (g             + eps)
+    pur_pyr          = (a + g)       / (c + t         + eps)
+    gc_x_kmer        = gc_content    * kmer_3_freq
+    mutation_x_gc    = mutation_flag * gc_content
+    a_plus_c         = a + c
+    t_plus_g         = t + g
+    a_minus_t        = a - t
+    c_minus_g        = c - g
+    kmer_sq          = kmer_3_freq ** 2
+    gc_sq            = (gc_content / 100) ** 2
+    class_x_mut      = class_enc * mutation_flag
+    kmer_x_mut       = kmer_3_freq * mutation_flag
+
+    # Feature vector (23 values — must match training column order exactly)
+    num_row = np.array([[
+        gc_content, at_content,
+        a, t, c, g,
+        kmer_3_freq, mutation_flag,
+        class_enc,
+        at_gc_ratio, a_t_ratio, c_g_ratio, pur_pyr,
+        gc_x_kmer, mutation_x_gc,
+        a_plus_c, t_plus_g, a_minus_t, c_minus_g,
+        kmer_sq, gc_sq, class_x_mut, kmer_x_mut,
+    ]], dtype=float)
+
+    # Scale with the same StandardScaler fitted during training
+    scaler = artifacts.get('scaler')
+    num_scaled = scaler.transform(num_row) if scaler is not None else num_row
+
+    # Combine with TF-IDF k-mer features
+    kmer_vectorizer = artifacts.get('kmer_vectorizer')
+    if kmer_vectorizer is not None and sequence:
+        kmer_str  = sequence_to_kmer_string(sequence.upper(), k=3)
+        kmer_feat = kmer_vectorizer.transform([kmer_str])
+        X = hstack([csr_matrix(num_scaled), kmer_feat])
     else:
-        return "Low"
+        X = csr_matrix(num_scaled)
+
+    return X
 
 
-def predict_disease(sequence):
-    """
-    Predict disease from DNA sequence
-    
-    Returns:
-        dict: Prediction results including disease, confidence, probabilities
-    """
-    # Clean sequence
+# ── Prediction ────────────────────────────────────────────────────────────────
+
+def predict_risk(sequence, class_label='Human'):
+    """Predict Disease Risk from a DNA sequence string."""
+    # Clean & validate
     sequence = clean_dna_sequence(sequence)
-    
-    # Validate sequence
     is_valid, message = validate_dna_sequence(sequence)
     if not is_valid:
         return {'error': message}
-    
-    # Get sequence statistics
+
     stats = get_sequence_stats(sequence)
-    
-    # Convert to k-mer representation
-    kmer_string = sequence_to_kmer_string(sequence, k=3)
-    
-    # Transform using vectorizer
-    features = vectorizer.transform([kmer_string])
-    
-    # Predict
-    prediction = model.predict(features)[0]
-    probabilities = model.predict_proba(features)[0]
-    confidence = max(probabilities)
-    
-    # Get all class probabilities
-    classes = model.classes_
-    prob_dict = {disease: float(prob) for disease, prob in zip(classes, probabilities)}
-    
-    # Sort probabilities
+    model = artifacts['model']
+    le_label = artifacts.get('label_encoder')
+
+    # If new-format model
+    if le_label is not None:
+        X = build_feature_row(stats, sequence, class_label)
+        raw_pred = model.predict(X)[0]
+        raw_proba = model.predict_proba(X)[0]
+        classes = list(le_label.classes_)
+        predicted_class = classes[raw_pred]
+        prob_dict = {c: float(p) for c, p in zip(classes, raw_proba)}
+    else:
+        # Legacy k-mer–only model
+        vectorizer = artifacts.get('kmer_vectorizer') or joblib.load(VECTORIZER_PATH)
+        kmer_str = sequence_to_kmer_string(sequence, k=3)
+        X = vectorizer.transform([kmer_str])
+        raw_pred = model.predict(X)[0]
+        raw_proba = model.predict_proba(X)[0]
+        classes = list(model.classes_)
+        predicted_class = str(raw_pred)
+        prob_dict = {c: float(p) for c, p in zip(classes, raw_proba)}
+
+    confidence = max(prob_dict.values())
     sorted_probs = sorted(prob_dict.items(), key=lambda x: x[1], reverse=True)
-    
-    # Classify risk level
-    risk_level = classify_risk_level(confidence)
-    
-    # Save to database
-    save_prediction_to_db(
-        stats['length'],
-        stats['gc_content'],
-        prediction,
-        confidence,
-        risk_level
+
+    save_prediction(
+        stats['length'], stats['gc_content'],
+        predicted_class, confidence, class_label
     )
-    
+
     return {
-        'disease': prediction,
+        'disease': predicted_class,               # "disease" key kept for compat
+        'risk_level': predicted_class,            # redundant alias
         'confidence': float(confidence),
-        'risk_level': risk_level,
         'probabilities': prob_dict,
         'top_predictions': sorted_probs[:3],
-        'stats': stats
+        'stats': stats,
+        'accuracy': artifacts.get('accuracy', 0),
+        'cv_mean': artifacts.get('cv_mean', 0),
     }
 
 
+# ── Routes ────────────────────────────────────────────────────────────────────
+
 @app.route('/')
 def index():
-    """Home page"""
-    return render_template('index.html')
+    model_info = {}
+    if artifacts:
+        model_info = {
+            'accuracy': round(artifacts.get('accuracy', 0) * 100, 2),
+            'cv_mean': round(artifacts.get('cv_mean', 0) * 100, 2),
+            'classes': artifacts.get('classes', []),
+        }
+    return render_template('index.html', model_info=model_info)
 
 
 @app.route('/predict', methods=['POST'])
 def predict():
-    """Handle prediction request"""
     try:
-        # Check if model is loaded
-        if model is None or vectorizer is None:
-            return jsonify({'error': 'Model not loaded. Please contact administrator.'}), 500
-        
+        if artifacts is None or artifacts.get('model') is None:
+            return jsonify({'error': 'Model not loaded. Run: python model/train_model.py'}), 500
+
         sequence = None
-        
-        # Check if file was uploaded
+        class_label = request.form.get('class_label', 'Human')
+
+        # File upload
         if 'file' in request.files:
-            file = request.files['file']
-            if file.filename != '':
-                content = file.read().decode('utf-8')
-                # Check if FASTA format
-                if content.startswith('>'):
-                    sequence = parse_fasta(content)
-                else:
-                    sequence = content
-        
-        # Check if sequence was pasted
+            f = request.files['file']
+            if f.filename:
+                content = f.read().decode('utf-8')
+                sequence = parse_fasta(content) if content.startswith('>') else content
+
+        # Pasted sequence
         if not sequence and 'sequence' in request.form:
             sequence = request.form['sequence']
-        
+
         if not sequence:
             return jsonify({'error': 'No DNA sequence provided'}), 400
-        
-        # Make prediction
-        result = predict_disease(sequence)
-        
+
+        result = predict_risk(sequence, class_label)
         if 'error' in result:
             return jsonify(result), 400
-        
+
         return jsonify(result)
-    
+
     except Exception as e:
         return jsonify({'error': f'Prediction error: {str(e)}'}), 500
 
 
 @app.route('/history')
 def history():
-    """Get prediction history"""
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute('''
-            SELECT timestamp, sequence_length, gc_content, predicted_disease, confidence, risk_level
+            SELECT timestamp, sequence_length, gc_content,
+                   predicted_risk, confidence, class_label
             FROM predictions
             ORDER BY timestamp DESC
             LIMIT 50
         ''')
         rows = cursor.fetchall()
         conn.close()
-        
-        history_data = []
-        for row in rows:
-            history_data.append({
-                'timestamp': row[0],
-                'sequence_length': row[1],
-                'gc_content': row[2],
-                'predicted_disease': row[3],
-                'confidence': row[4],
-                'risk_level': row[5]
-            })
-        
-        return jsonify(history_data)
-    
+        return jsonify([{
+            'timestamp': r[0], 'sequence_length': r[1], 'gc_content': r[2],
+            'predicted_disease': r[3], 'confidence': r[4], 'risk_level': r[3],
+            'class_label': r[5]
+        } for r in rows])
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/model-info')
+def model_info():
+    if artifacts is None:
+        return jsonify({'status': 'not loaded'})
+    return jsonify({
+        'accuracy': artifacts.get('accuracy', 0),
+        'cv_mean': artifacts.get('cv_mean', 0),
+        'cv_std': artifacts.get('cv_std', 0),
+        'classes': artifacts.get('classes', []),
+    })
 
 
 @app.route('/download-report', methods=['POST'])
 def download_report():
-    """Generate and download PDF report"""
+    if not HAS_REPORTLAB:
+        return jsonify({'error': 'ReportLab not installed'}), 500
     try:
         data = request.json
-        
-        # Create PDF
         buffer = BytesIO()
         doc = SimpleDocTemplate(buffer, pagesize=letter)
         elements = []
         styles = getSampleStyleSheet()
-        
-        # Title
+
         title_style = ParagraphStyle(
-            'CustomTitle',
-            parent=styles['Heading1'],
-            fontSize=24,
-            textColor=colors.HexColor('#2c3e50'),
-            spaceAfter=30,
-            alignment=1  # Center
+            'Title', parent=styles['Heading1'], fontSize=22,
+            textColor=rl_colors.HexColor('#0f172a'), spaceAfter=20, alignment=1
         )
-        elements.append(Paragraph("DNA Disease Prediction Report", title_style))
-        elements.append(Spacer(1, 0.3*inch))
-        
-        # Date
-        date_text = f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-        elements.append(Paragraph(date_text, styles['Normal']))
-        elements.append(Spacer(1, 0.3*inch))
-        
-        # Prediction Results
+        elements.append(Paragraph("DNA Disease Risk Prediction Report", title_style))
+        elements.append(Spacer(1, 0.2 * inch))
+        elements.append(Paragraph(
+            f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            styles['Normal']
+        ))
+        elements.append(Spacer(1, 0.3 * inch))
         elements.append(Paragraph("Prediction Results", styles['Heading2']))
-        elements.append(Spacer(1, 0.2*inch))
-        
+        elements.append(Spacer(1, 0.1 * inch))
+
+        risk = data.get('disease', data.get('risk_level', 'N/A'))
         results_data = [
-            ['Predicted Disease:', data.get('disease', 'N/A')],
+            ['Predicted Risk Level:', risk],
             ['Confidence:', f"{data.get('confidence', 0) * 100:.2f}%"],
-            ['Risk Level:', data.get('risk_level', 'N/A')],
+            ['Model Accuracy:', f"{data.get('accuracy', 0) * 100:.1f}%"],
         ]
-        
-        results_table = Table(results_data, colWidths=[2*inch, 4*inch])
-        results_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#ecf0f1')),
-            ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
-            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        t = Table(results_data, colWidths=[2 * inch, 4 * inch])
+        t.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (0, -1), rl_colors.HexColor('#f1f5f9')),
             ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
             ('FONTSIZE', (0, 0), (-1, -1), 11),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 12),
-            ('GRID', (0, 0), (-1, -1), 1, colors.grey)
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 10),
+            ('GRID', (0, 0), (-1, -1), 0.5, rl_colors.grey),
         ]))
-        elements.append(results_table)
-        elements.append(Spacer(1, 0.3*inch))
-        
-        # Sequence Statistics
+        elements.append(t)
+        elements.append(Spacer(1, 0.3 * inch))
+
         elements.append(Paragraph("Sequence Statistics", styles['Heading2']))
-        elements.append(Spacer(1, 0.2*inch))
-        
+        elements.append(Spacer(1, 0.1 * inch))
         stats = data.get('stats', {})
         stats_data = [
-            ['Length:', f"{stats.get('length', 0)} nucleotides"],
-            ['GC Content:', f"{stats.get('gc_content', 0):.2f}%"],
-            ['AT Content:', f"{stats.get('at_content', 0):.2f}%"],
-            ['A Count:', str(stats.get('a_count', 0))],
-            ['T Count:', str(stats.get('t_count', 0))],
-            ['C Count:', str(stats.get('c_count', 0))],
-            ['G Count:', str(stats.get('g_count', 0))],
+            ['Length:',      f"{stats.get('length', 0)} nt"],
+            ['GC Content:',  f"{stats.get('gc_content', 0):.2f}%"],
+            ['AT Content:',  f"{stats.get('at_content', 0):.2f}%"],
+            ['Adenine (A):', str(stats.get('a_count', 0))],
+            ['Thymine (T):', str(stats.get('t_count', 0))],
+            ['Cytosine (C):', str(stats.get('c_count', 0))],
+            ['Guanine (G):', str(stats.get('g_count', 0))],
         ]
-        
-        stats_table = Table(stats_data, colWidths=[2*inch, 4*inch])
-        stats_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#ecf0f1')),
-            ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
-            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        t2 = Table(stats_data, colWidths=[2 * inch, 4 * inch])
+        t2.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (0, -1), rl_colors.HexColor('#f1f5f9')),
             ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
             ('FONTSIZE', (0, 0), (-1, -1), 11),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 12),
-            ('GRID', (0, 0), (-1, -1), 1, colors.grey)
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 10),
+            ('GRID', (0, 0), (-1, -1), 0.5, rl_colors.grey),
         ]))
-        elements.append(stats_table)
-        elements.append(Spacer(1, 0.5*inch))
-        
-        # Disclaimer
-        disclaimer_style = ParagraphStyle(
-            'Disclaimer',
-            parent=styles['Normal'],
-            fontSize=9,
-            textColor=colors.HexColor('#7f8c8d'),
-            leading=12
+        elements.append(t2)
+        elements.append(Spacer(1, 0.4 * inch))
+
+        disc_style = ParagraphStyle(
+            'Disc', parent=styles['Normal'], fontSize=8,
+            textColor=rl_colors.HexColor('#64748b'), leading=12
         )
-        disclaimer_text = """
-        <b>Medical Disclaimer:</b> This prediction is for educational and research purposes only. 
-        It should not be used as a substitute for professional medical advice, diagnosis, or treatment. 
-        Always seek the advice of your physician or other qualified health provider with any questions 
-        you may have regarding a medical condition.
-        """
-        elements.append(Paragraph(disclaimer_text, disclaimer_style))
-        
-        # Build PDF
+        elements.append(Paragraph(
+            "<b>Medical Disclaimer:</b> This prediction is for educational and research "
+            "purposes only. It should not be used as a substitute for professional medical "
+            "advice, diagnosis, or treatment.", disc_style
+        ))
+
         doc.build(elements)
         buffer.seek(0)
-        
         return send_file(
-            buffer,
-            as_attachment=True,
-            download_name=f'dna_prediction_report_{datetime.now().strftime("%Y%m%d_%H%M%S")}.pdf',
+            buffer, as_attachment=True,
+            download_name=f'dna_risk_report_{datetime.now().strftime("%Y%m%d_%H%M%S")}.pdf',
             mimetype='application/pdf'
         )
-    
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 
+# ── Entry point ───────────────────────────────────────────────────────────────
+
 if __name__ == '__main__':
-    # Initialize database
     init_database()
-    
-    # Load model
-    if not load_model_and_vectorizer():
-        print("\n" + "="*70)
-        print("WARNING: Model not found!")
-        print("Please run the following command to train the model:")
-        print("  python model/train_model.py")
-        print("="*70 + "\n")
-    
-    # Run app
+    load_model()
     app.run(debug=True, host='0.0.0.0', port=5000)

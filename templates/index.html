@@ -3,256 +3,1051 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DNA Disease Prediction System</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <title>GenomIQ – DNA Disease Risk Classifier</title>
+    <meta name="description" content="Advanced AI-powered genomic analysis for DNA disease risk classification using XGBoost and LightGBM ensemble models.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    <style>
+        /* ─── Reset & Tokens ─────────────────────────────────────────────── */
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        :root {
+            --bg-base:       #050d12;
+            --bg-surface:    #0a1520;
+            --bg-card:       rgba(10,25,40,0.75);
+            --bg-glass:      rgba(255,255,255,0.04);
+            --border:        rgba(0,210,255,0.15);
+            --border-hover:  rgba(0,210,255,0.45);
+            --accent:        #00d2ff;
+            --accent2:       #7b2ff7;
+            --accent3:       #00ffa3;
+            --danger:        #ff4d6d;
+            --warning:       #ffd60a;
+            --text-primary:  #e2f4ff;
+            --text-secondary:#7fb8d4;
+            --text-muted:    #405570;
+            --radius-sm:     8px;
+            --radius-md:     14px;
+            --radius-lg:     22px;
+            --shadow-glow:   0 0 40px rgba(0,210,255,0.18);
+            --shadow-card:   0 8px 40px rgba(0,0,0,0.5), 0 0 0 1px rgba(0,210,255,0.10);
+            --transition:    0.3s cubic-bezier(.4,0,.2,1);
+        }
+
+        html { scroll-behavior: smooth; }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--bg-base);
+            color: var(--text-primary);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        /* ─── Animated Background ────────────────────────────────────────── */
+        .bg-canvas {
+            position: fixed; inset: 0; z-index: 0; pointer-events: none;
+            background: radial-gradient(ellipse 80% 60% at 15% 10%,
+                rgba(0,210,255,0.08) 0%, transparent 60%),
+                radial-gradient(ellipse 60% 50% at 85% 90%,
+                rgba(123,47,247,0.1) 0%, transparent 60%);
+        }
+
+        .bg-canvas::after {
+            content:''; position:absolute; inset:0;
+            background: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%2300d2ff' fill-opacity='0.025'%3E%3Ccircle cx='30' cy='30' r='1'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E") repeat;
+        }
+
+        /* ─── DNA Helix SVG (decorative) ────────────────────────────────── */
+        .dna-helix-wrap {
+            position:fixed; right:-60px; top:10%; z-index:0; opacity:0.08;
+            animation: helixFloat 8s ease-in-out infinite;
+        }
+        @keyframes helixFloat {
+            0%,100% { transform: translateY(0); }
+            50% { transform: translateY(20px); }
+        }
+
+        /* ─── Layout ─────────────────────────────────────────────────────── */
+        .content { position: relative; z-index: 1; }
+
+        /* ─── Navbar ─────────────────────────────────────────────────────── */
+        nav {
+            position: sticky; top: 0; z-index: 100;
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 0 32px; height: 64px;
+            background: rgba(5,13,18,0.85);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .nav-brand {
+            display: flex; align-items: center; gap: 10px;
+            font-size: 1.2rem; font-weight: 700;
+            color: var(--accent); text-decoration: none;
+        }
+
+        .nav-brand .logo-icon {
+            width: 34px; height: 34px;
+            background: linear-gradient(135deg, var(--accent), var(--accent2));
+            border-radius: 8px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 16px;
+        }
+
+        .nav-links { display: flex; align-items: center; gap: 8px; }
+        .nav-links a {
+            color: var(--text-secondary); text-decoration: none;
+            padding: 6px 14px; border-radius: 6px; font-size: 0.88rem;
+            transition: all var(--transition);
+        }
+        .nav-links a:hover { color: var(--accent); background: rgba(0,210,255,0.08); }
+
+        .badge-model {
+            font-size: 0.72rem; padding: 3px 10px; border-radius: 20px;
+            background: linear-gradient(135deg, rgba(0,210,255,0.2), rgba(123,47,247,0.2));
+            border: 1px solid var(--border);
+            color: var(--accent);
+        }
+
+        /* ─── Hero Section ───────────────────────────────────────────────── */
+        .hero {
+            text-align: center;
+            padding: 72px 24px 56px;
+            max-width: 800px; margin: 0 auto;
+        }
+
+        .hero-chip {
+            display: inline-flex; align-items: center; gap: 6px;
+            background: rgba(0,210,255,0.08); border: 1px solid var(--border);
+            border-radius: 20px; padding: 5px 14px;
+            font-size: 0.78rem; color: var(--accent); margin-bottom: 24px;
+            animation: fadeUp 0.6s ease both;
+        }
+
+        .hero h1 {
+            font-size: clamp(2rem, 5vw, 3.4rem);
+            font-weight: 800; line-height: 1.15;
+            margin-bottom: 20px;
+            animation: fadeUp 0.7s ease 0.1s both;
+        }
+
+        .hero h1 span {
+            background: linear-gradient(90deg, var(--accent), var(--accent2));
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .hero p {
+            font-size: 1.1rem; color: var(--text-secondary);
+            max-width: 560px; margin: 0 auto 32px;
+            line-height: 1.7;
+            animation: fadeUp 0.8s ease 0.2s both;
+        }
+
+        .stats-row {
+            display: flex; justify-content: center; gap: 40px; flex-wrap: wrap;
+            animation: fadeUp 0.9s ease 0.3s both;
+        }
+
+        .stat {
+            display: flex; flex-direction: column; align-items: center;
+        }
+
+        .stat-val {
+            font-size: 1.6rem; font-weight: 800;
+            background: linear-gradient(90deg, var(--accent), var(--accent3));
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .stat-label { font-size: 0.78rem; color: var(--text-muted); margin-top: 2px; }
+
+        /* ─── Main Grid ──────────────────────────────────────────────────── */
+        .main-wrap {
+            max-width: 1200px; margin: 0 auto;
+            padding: 0 24px 80px;
+        }
+
+        .grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+            animation: fadeUp 1s ease 0.4s both;
+        }
+
+        @media (max-width: 860px) { .grid-2 { grid-template-columns: 1fr; } }
+
+        /* ─── Card ───────────────────────────────────────────────────────── */
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            backdrop-filter: blur(20px);
+            box-shadow: var(--shadow-card);
+            overflow: hidden;
+            transition: border-color var(--transition);
+        }
+
+        .card:hover { border-color: var(--border-hover); }
+
+        .card-header {
+            display: flex; align-items: center; gap: 12px;
+            padding: 20px 24px;
+            border-bottom: 1px solid var(--border);
+            font-weight: 600; font-size: 1rem;
+        }
+
+        .card-header .icon {
+            width: 36px; height: 36px;
+            background: linear-gradient(135deg, var(--accent), var(--accent2));
+            border-radius: 9px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 16px; flex-shrink: 0;
+        }
+
+        .card-body { padding: 24px; }
+
+        /* ─── Tabs ───────────────────────────────────────────────────────── */
+        .tabs {
+            display: flex; gap: 4px; background: rgba(255,255,255,0.04);
+            border-radius: 10px; padding: 4px; margin-bottom: 20px;
+        }
+
+        .tab-btn {
+            flex: 1; padding: 9px 12px;
+            background: transparent; border: none; cursor: pointer;
+            border-radius: 7px; color: var(--text-muted);
+            font-size: 0.85rem; font-weight: 500; transition: all var(--transition);
+            display: flex; align-items: center; justify-content: center; gap: 6px;
+        }
+
+        .tab-btn.active {
+            background: linear-gradient(135deg, rgba(0,210,255,0.2), rgba(123,47,247,0.2));
+            color: var(--text-primary);
+            border: 1px solid var(--border);
+        }
+
+        .tab-pane { display: none; }
+        .tab-pane.active { display: block; }
+
+        /* ─── Input & Textarea ───────────────────────────────────────────── */
+        label.field-label {
+            display: block; font-size: 0.82rem; font-weight: 500;
+            color: var(--text-secondary); margin-bottom: 8px;
+        }
+
+        textarea, input[type="file"], select {
+            width: 100%; background: rgba(0,0,0,0.4);
+            border: 1px solid var(--border); border-radius: var(--radius-sm);
+            color: var(--text-primary); font-family: 'JetBrains Mono', monospace;
+            font-size: 0.82rem; padding: 12px 14px;
+            transition: border-color var(--transition);
+            outline: none; resize: vertical;
+        }
+
+        textarea:focus, input[type="file"]:focus, select:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(0,210,255,0.08);
+        }
+
+        select { font-family: 'Inter', sans-serif; font-size: 0.88rem; cursor: pointer; }
+
+        select option { background: #0a1520; }
+
+        .char-counter {
+            font-size: 0.75rem; color: var(--text-muted);
+            text-align: right; margin-top: 4px;
+        }
+
+        input[type="file"]::file-selector-button {
+            background: linear-gradient(135deg, rgba(0,210,255,0.15), rgba(123,47,247,0.15));
+            border: 1px solid var(--border); border-radius: 6px;
+            color: var(--text-primary); padding: 6px 12px;
+            cursor: pointer; font-family: 'Inter', sans-serif;
+            transition: all var(--transition); margin-right: 10px;
+        }
+
+        input[type="file"]::file-selector-button:hover { border-color: var(--accent); }
+
+        /* ─── Quick Samples ──────────────────────────────────────────────── */
+        .sample-chips {
+            display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px;
+        }
+
+        .chip {
+            display: inline-flex; align-items: center; gap: 5px;
+            padding: 5px 12px; border-radius: 20px;
+            background: rgba(255,255,255,0.04); border: 1px solid var(--border);
+            color: var(--text-secondary); font-size: 0.78rem; cursor: pointer;
+            transition: all var(--transition); font-family: 'Inter', sans-serif;
+        }
+
+        .chip:hover { border-color: var(--accent); color: var(--accent); background: rgba(0,210,255,0.06); }
+
+        /* ─── Buttons ────────────────────────────────────────────────────── */
+        .btn {
+            display: inline-flex; align-items: center; gap: 8px;
+            padding: 13px 22px; border: none; border-radius: var(--radius-sm);
+            font-size: 0.92rem; font-weight: 600; cursor: pointer;
+            transition: all var(--transition); text-decoration: none;
+            font-family: 'Inter', sans-serif;
+        }
+
+        .btn-primary {
+            width: 100%;
+            background: linear-gradient(135deg, var(--accent), var(--accent2));
+            color: #fff;
+            box-shadow: 0 4px 20px rgba(0,210,255,0.3);
+            justify-content: center;
+        }
+
+        .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 8px 28px rgba(0,210,255,0.4); }
+        .btn-primary:active { transform: translateY(0); }
+        .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+        .btn-outline {
+            background: transparent; color: var(--text-secondary);
+            border: 1px solid var(--border);
+        }
+
+        .btn-outline:hover { border-color: var(--accent); color: var(--accent); background: rgba(0,210,255,0.06); }
+
+        .btn-sm { padding: 7px 14px; font-size: 0.8rem; }
+
+        /* ─── Loading Spinner ────────────────────────────────────────────── */
+        .loader {
+            display: none; flex-direction: column; align-items: center; gap: 16px;
+            padding: 32px 0;
+        }
+
+        .loader.active { display: flex; }
+
+        .dna-spinner {
+            width: 60px; height: 60px;
+            border: 3px solid rgba(0,210,255,0.15);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .loader-text {
+            font-size: 0.88rem; color: var(--text-secondary);
+            animation: pulse 1.5s ease infinite;
+        }
+
+        @keyframes pulse { 0%,100%{opacity:1}50%{opacity:0.4} }
+
+        /* ─── Results Section ────────────────────────────────────────────── */
+        #resultsSection { display: none; }
+
+        .risk-hero {
+            text-align: center; padding: 32px 24px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .risk-label {
+            font-size: 0.78rem; font-weight: 600; letter-spacing: 0.1em;
+            text-transform: uppercase; color: var(--text-muted); margin-bottom: 8px;
+        }
+
+        .risk-value {
+            font-size: 2.4rem; font-weight: 800; line-height: 1;
+            margin-bottom: 12px;
+        }
+
+        .risk-value.High  { color: var(--danger); text-shadow: 0 0 30px rgba(255,77,109,0.4); }
+        .risk-value.Medium{ color: var(--warning); text-shadow: 0 0 30px rgba(255,214,10,0.35); }
+        .risk-value.Low   { color: var(--accent3); text-shadow: 0 0 30px rgba(0,255,163,0.35); }
+
+        /* ─── Confidence Bar ─────────────────────────────────────────────── */
+        .confidence-wrap { margin-bottom: 20px; }
+        .confidence-label-row {
+            display: flex; justify-content: space-between;
+            font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 6px;
+        }
+
+        .progress-track {
+            height: 10px; background: rgba(255,255,255,0.06);
+            border-radius: 10px; overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%; border-radius: 10px;
+            background: linear-gradient(90deg, var(--accent), var(--accent2));
+            transition: width 1s cubic-bezier(.22,.68,0,1.2);
+            box-shadow: 0 0 10px rgba(0,210,255,0.5);
+        }
+
+        /* ─── Probability Bars ───────────────────────────────────────────── */
+        .prob-list { display: flex; flex-direction: column; gap: 10px; }
+
+        .prob-row { display: flex; align-items: center; gap: 12px; }
+
+        .prob-name {
+            width: 80px; font-size: 0.8rem; font-weight: 600;
+            color: var(--text-secondary); flex-shrink: 0;
+        }
+
+        .prob-bar-wrap { flex: 1; height: 8px; background: rgba(255,255,255,0.06); border-radius: 8px; overflow: hidden; }
+        .prob-bar { height: 100%; border-radius: 8px; transition: width 1s ease; }
+        .prob-bar.High   { background: linear-gradient(90deg, var(--danger), #ff8c9c); }
+        .prob-bar.Medium { background: linear-gradient(90deg, var(--warning), #ffe066); }
+        .prob-bar.Low    { background: linear-gradient(90deg, var(--accent3), #66ffcc); }
+
+        .prob-pct {
+            width: 44px; font-size: 0.78rem; font-weight: 600;
+            color: var(--text-primary); text-align: right;
+        }
+
+        /* ─── Stats Grid ─────────────────────────────────────────────────── */
+        .stats-grid {
+            display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px;
+            margin-top: 4px;
+        }
+
+        .stat-card {
+            background: rgba(255,255,255,0.03); border: 1px solid var(--border);
+            border-radius: var(--radius-sm); padding: 12px 16px;
+        }
+
+        .stat-card-label { font-size: 0.72rem; color: var(--text-muted); margin-bottom: 4px; }
+        .stat-card-val   { font-size: 1rem; font-weight: 700; color: var(--text-primary); }
+
+        /* ─── Nucleotide Chart ───────────────────────────────────────────── */
+        .nuc-bars { display: flex; align-items: flex-end; gap: 8px; height: 80px; margin-top: 12px; }
+        .nuc-col  { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+        .nuc-bar  { width: 100%; border-radius: 4px 4px 0 0; transition: height 0.8s ease; }
+        .nuc-bar.A { background: linear-gradient(180deg, #00d2ff, #004e8c); }
+        .nuc-bar.T { background: linear-gradient(180deg, #7b2ff7, #3a0099); }
+        .nuc-bar.C { background: linear-gradient(180deg, #00ffa3, #007a4f); }
+        .nuc-bar.G { background: linear-gradient(180deg, #ffd60a, #7a6500); }
+        .nuc-label { font-size: 0.72rem; font-weight: 700; color: var(--text-secondary); }
+
+        /* ─── Warning / Disclaimer ───────────────────────────────────────── */
+        .disclaimer {
+            display: flex; gap: 12px;
+            background: rgba(255,214,10,0.07); border: 1px solid rgba(255,214,10,0.25);
+            border-radius: var(--radius-sm); padding: 14px 16px;
+            font-size: 0.8rem; color: var(--text-secondary); line-height: 1.5;
+            margin-top: 20px;
+        }
+
+        .disclaimer i { color: var(--warning); margin-top: 2px; flex-shrink: 0; }
+
+        /* ─── History Table ──────────────────────────────────────────────── */
+        #historySection { display: none; margin-top: 32px; }
+
+        .table-wrap { overflow-x: auto; }
+
+        table {
+            width: 100%; border-collapse: collapse; font-size: 0.83rem;
+        }
+
+        th, td {
+            padding: 11px 16px; text-align: left;
+            border-bottom: 1px solid rgba(255,255,255,0.04);
+        }
+
+        th { color: var(--text-muted); font-weight: 600; font-size: 0.72rem;
+             text-transform: uppercase; letter-spacing: 0.05em; }
+        tr:hover td { background: rgba(0,210,255,0.03); }
+
+        .risk-chip {
+            display: inline-flex; align-items: center; gap: 4px;
+            padding: 3px 10px; border-radius: 12px; font-size: 0.72rem; font-weight: 600;
+        }
+
+        .risk-chip.High   { background: rgba(255,77,109,0.15); color: var(--danger); border: 1px solid rgba(255,77,109,0.3); }
+        .risk-chip.Medium { background: rgba(255,214,10,0.12); color: var(--warning); border: 1px solid rgba(255,214,10,0.3); }
+        .risk-chip.Low    { background: rgba(0,255,163,0.12); color: var(--accent3); border: 1px solid rgba(0,255,163,0.28); }
+
+        /* ─── Model Badge ────────────────────────────────────────────────── */
+        .model-info-bar {
+            display: flex; gap: 24px; flex-wrap: wrap;
+            justify-content: center; padding: 14px 24px;
+            background: rgba(255,255,255,0.02); border-bottom: 1px solid var(--border);
+            font-size: 0.78rem; color: var(--text-secondary);
+        }
+
+        .m-stat { display: flex; align-items: center; gap: 6px; }
+        .m-stat i { color: var(--accent); }
+
+        /* ─── Animations ─────────────────────────────────────────────────── */
+        @keyframes fadeUp {
+            from { opacity:0; transform: translateY(18px); }
+            to   { opacity:1; transform: translateY(0); }
+        }
+
+        .fade-in { animation: fadeUp 0.5s ease both; }
+
+        /* ─── Scrollbar ──────────────────────────────────────────────────── */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: var(--bg-base); }
+        ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+
+        /* ─── Error ──────────────────────────────────────────────────────── */
+        .error-box {
+            background: rgba(255,77,109,0.08); border: 1px solid rgba(255,77,109,0.3);
+            color: var(--danger); border-radius: var(--radius-sm);
+            padding: 14px 16px; font-size: 0.85rem;
+            display: flex; align-items: center; gap: 10px; margin-top: 16px;
+        }
+
+        /* ─── Section headers ────────────────────────────────────────────── */
+        .section-title {
+            font-size: 0.75rem; font-weight: 600; letter-spacing: 0.08em;
+            text-transform: uppercase; color: var(--text-muted);
+            margin-bottom: 14px;
+        }
+
+        /* ─── Footer ─────────────────────────────────────────────────────── */
+        footer {
+            text-align: center; padding: 28px;
+            border-top: 1px solid var(--border);
+            font-size: 0.8rem; color: var(--text-muted);
+        }
+
+        footer span { color: var(--accent); }
+
+        /* ─── Responsive ─────────────────────────────────────────────────── */
+        @media (max-width: 600px) {
+            nav { padding: 0 16px; }
+            .hero { padding: 48px 16px 36px; }
+            .card-body { padding: 16px; }
+            .stats-grid { grid-template-columns: 1fr 1fr; }
+        }
+    </style>
 </head>
 <body>
-    <!-- Navigation -->
-    <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
-        <div class="container">
-            <a class="navbar-brand" href="/">
-                <i class="fas fa-dna"></i> DNA Disease Prediction
-            </a>
-            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
-                <span class="navbar-toggler-icon"></span>
-            </button>
-            <div class="collapse navbar-collapse" id="navbarNav">
-                <ul class="navbar-nav ms-auto">
-                    <li class="nav-item">
-                        <a class="nav-link active" href="/">Home</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="#history" onclick="showHistory()">History</a>
-                    </li>
-                </ul>
-            </div>
+<div class="bg-canvas"></div>
+
+<!-- Decorative DNA Helix -->
+<div class="dna-helix-wrap">
+    <svg width="120" height="600" viewBox="0 0 120 600" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M20,0 Q100,50 20,100 Q-60,150 20,200 Q100,250 20,300 Q-60,350 20,400 Q100,450 20,500 Q-60,550 20,600" stroke="#00d2ff" stroke-width="2"/>
+        <path d="M100,0 Q20,50 100,100 Q180,150 100,200 Q20,250 100,300 Q180,350 100,400 Q20,450 100,500 Q180,550 100,600" stroke="#7b2ff7" stroke-width="2"/>
+        <line x1="20" y1="25"  x2="100" y2="75"  stroke="#00ffa3" stroke-width="1.5" stroke-opacity="0.6"/>
+        <line x1="20" y1="75"  x2="100" y2="25"  stroke="#00ffa3" stroke-width="1.5" stroke-opacity="0.6"/>
+        <line x1="20" y1="125" x2="100" y2="175" stroke="#00ffa3" stroke-width="1.5" stroke-opacity="0.6"/>
+        <line x1="20" y1="175" x2="100" y2="125" stroke="#00ffa3" stroke-width="1.5" stroke-opacity="0.6"/>
+        <line x1="20" y1="225" x2="100" y2="275" stroke="#00ffa3" stroke-width="1.5" stroke-opacity="0.6"/>
+        <line x1="20" y1="275" x2="100" y2="225" stroke="#00ffa3" stroke-width="1.5" stroke-opacity="0.6"/>
+        <line x1="20" y1="325" x2="100" y2="375" stroke="#00ffa3" stroke-width="1.5" stroke-opacity="0.6"/>
+        <line x1="20" y1="375" x2="100" y2="325" stroke="#00ffa3" stroke-width="1.5" stroke-opacity="0.6"/>
+        <line x1="20" y1="425" x2="100" y2="475" stroke="#00ffa3" stroke-width="1.5" stroke-opacity="0.6"/>
+        <line x1="20" y1="475" x2="100" y2="425" stroke="#00ffa3" stroke-width="1.5" stroke-opacity="0.6"/>
+    </svg>
+</div>
+
+<div class="content">
+
+<!-- ── Navigation ──────────────────────────────────────────────────────── -->
+<nav>
+    <a href="/" class="nav-brand">
+        <div class="logo-icon"><i class="fas fa-dna"></i></div>
+        Genom<span style="color:var(--accent2)">IQ</span>
+    </a>
+    <div class="nav-links">
+        <a href="/" id="navHome"><i class="fas fa-house"></i> Home</a>
+        <a href="#" onclick="showSection('history')"><i class="fas fa-clock-rotate-left"></i> History</a>
+        <span class="badge-model" id="modelBadge">
+            <i class="fas fa-microchip" style="font-size:10px"></i> XGB + LGBM
+        </span>
+    </div>
+</nav>
+
+<!-- ── Model Info Bar ──────────────────────────────────────────────────── -->
+<div class="model-info-bar" id="modelInfoBar">
+    <div class="m-stat"><i class="fas fa-bullseye"></i> <span>Test Accuracy: </span><strong id="m-acc">–</strong></div>
+    <div class="m-stat"><i class="fas fa-layer-group"></i> <span>CV Score: </span><strong id="m-cv">–</strong></div>
+    <div class="m-stat"><i class="fas fa-tags"></i> <span>Classes: </span><strong id="m-classes">High · Medium · Low</strong></div>
+    <div class="m-stat"><i class="fas fa-robot"></i> <span>Ensemble: XGBoost + LightGBM</span></div>
+</div>
+
+<!-- ── Hero ───────────────────────────────────────────────────────────── -->
+<section class="hero">
+    <div class="hero-chip">
+        <i class="fas fa-circle-dot" style="font-size:8px"></i>
+        AI-Powered Genomic Analysis
+    </div>
+    <h1>DNA <span>Disease Risk</span><br>Classification</h1>
+    <p>Analyse DNA sequences with our XGBoost + LightGBM ensemble to predict disease risk levels — High, Medium or Low — with confidence scores and full nucleotide statistics.</p>
+    <div class="stats-row">
+        <div class="stat">
+            <div class="stat-val" id="hero-acc">–</div>
+            <div class="stat-label">Model Accuracy</div>
         </div>
-    </nav>
-
-    <!-- Header -->
-    <header class="header-section text-center py-5 bg-gradient">
-        <div class="container">
-            <h1 class="display-4 text-white mb-3">
-                <i class="fas fa-dna"></i> DNA Disease Prediction System
-            </h1>
-            <p class="lead text-white">Advanced machine learning-powered genomic analysis for disease prediction</p>
+        <div class="stat">
+            <div class="stat-val">3,000</div>
+            <div class="stat-label">Training Samples</div>
         </div>
-    </header>
+        <div class="stat">
+            <div class="stat-val">13+</div>
+            <div class="stat-label">Feature Dimensions</div>
+        </div>
+        <div class="stat">
+            <div class="stat-val">3</div>
+            <div class="stat-label">Risk Categories</div>
+        </div>
+    </div>
+</section>
 
-    <!-- Main Content -->
-    <main class="container my-5">
-        <!-- Input Section -->
-        <div class="row justify-content-center" id="inputSection">
-            <div class="col-lg-10">
-                <div class="card shadow-lg">
-                    <div class="card-header bg-primary text-white">
-                        <h4 class="mb-0"><i class="fas fa-file-upload"></i> Input DNA Sequence</h4>
-                    </div>
-                    <div class="card-body">
-                        <form id="predictionForm">
-                            <!-- Tab Navigation -->
-                            <ul class="nav nav-tabs mb-4" id="inputTabs" role="tablist">
-                                <li class="nav-item" role="presentation">
-                                    <button class="nav-link active" id="paste-tab" data-bs-toggle="tab" data-bs-target="#paste" type="button">
-                                        <i class="fas fa-keyboard"></i> Paste Sequence
-                                    </button>
-                                </li>
-                                <li class="nav-item" role="presentation">
-                                    <button class="nav-link" id="upload-tab" data-bs-toggle="tab" data-bs-target="#upload" type="button">
-                                        <i class="fas fa-upload"></i> Upload File
-                                    </button>
-                                </li>
-                            </ul>
+<!-- ── Main Content ────────────────────────────────────────────────────── -->
+<div class="main-wrap">
 
-                            <!-- Tab Content -->
-                            <div class="tab-content" id="inputTabsContent">
-                                <!-- Paste Tab -->
-                                <div class="tab-pane fade show active" id="paste" role="tabpanel">
-                                    <div class="mb-3">
-                                        <label for="sequenceInput" class="form-label">
-                                            DNA Sequence (A, T, C, G only)
-                                        </label>
-                                        <textarea 
-                                            class="form-control font-monospace" 
-                                            id="sequenceInput" 
-                                            rows="8" 
-                                            placeholder="Enter DNA sequence here... (minimum 50 nucleotides)&#10;Example: ATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCG..."
-                                        ></textarea>
-                                        <small class="form-text text-muted">
-                                            Enter at least 50 nucleotides. Only A, T, C, and G characters are accepted.
-                                        </small>
-                                    </div>
-                                </div>
+    <!-- Analysis Section -->
+    <div id="analysisSection">
+        <div class="grid-2">
 
-                                <!-- Upload Tab -->
-                                <div class="tab-pane fade" id="upload" role="tabpanel">
-                                    <div class="mb-3">
-                                        <label for="fileInput" class="form-label">
-                                            Upload FASTA or Text File
-                                        </label>
-                                        <input 
-                                            class="form-control" 
-                                            type="file" 
-                                            id="fileInput" 
-                                            accept=".fasta,.fa,.txt"
-                                        >
-                                        <small class="form-text text-muted">
-                                            Supported formats: .fasta, .fa, .txt (max 16MB)
-                                        </small>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <!-- Sample Sequences -->
-                            <div class="alert alert-info">
-                                <strong><i class="fas fa-lightbulb"></i> Quick Test:</strong>
-                                <button type="button" class="btn btn-sm btn-outline-primary ms-2" onclick="loadSample('diabetes')">
-                                    Load Diabetes Sample
-                                </button>
-                                <button type="button" class="btn btn-sm btn-outline-primary ms-2" onclick="loadSample('cancer')">
-                                    Load Cancer Sample
-                                </button>
-                                <button type="button" class="btn btn-sm btn-outline-primary ms-2" onclick="loadSample('healthy')">
-                                    Load Healthy Sample
-                                </button>
-                            </div>
-
-                            <!-- Submit Button -->
-                            <div class="d-grid gap-2">
-                                <button type="submit" class="btn btn-primary btn-lg" id="submitBtn">
-                                    <i class="fas fa-search"></i> Analyze DNA Sequence
-                                </button>
-                            </div>
-                        </form>
-
-                        <!-- Loading Spinner -->
-                        <div id="loadingSpinner" class="text-center mt-4" style="display: none;">
-                            <div class="spinner-border text-primary" role="status">
-                                <span class="visually-hidden">Processing...</span>
-                            </div>
-                            <p class="mt-2">Analyzing DNA sequence...</p>
-                        </div>
-                    </div>
+            <!-- ── Input Card ── -->
+            <div class="card" id="inputCard">
+                <div class="card-header">
+                    <div class="icon"><i class="fas fa-file-code"></i></div>
+                    <span>Input DNA Sequence</span>
                 </div>
-            </div>
-        </div>
-
-        <!-- Results Section -->
-        <div class="row justify-content-center mt-5" id="resultsSection" style="display: none;">
-            <div class="col-lg-10">
-                <div class="card shadow-lg">
-                    <div class="card-header bg-success text-white">
-                        <h4 class="mb-0"><i class="fas fa-chart-bar"></i> Prediction Results</h4>
-                    </div>
-                    <div class="card-body">
-                        <!-- Main Prediction -->
-                        <div class="text-center mb-4">
-                            <h3>Predicted Disease:</h3>
-                            <h2 class="text-primary" id="predictedDisease">-</h2>
-                            <div class="mt-3">
-                                <span class="badge fs-5" id="riskBadge">-</span>
-                            </div>
-                        </div>
-
-                        <!-- Confidence -->
-                        <div class="mb-4">
-                            <h5>Confidence Score</h5>
-                            <div class="progress" style="height: 30px;">
-                                <div 
-                                    class="progress-bar progress-bar-striped progress-bar-animated" 
-                                    id="confidenceBar" 
-                                    role="progressbar" 
-                                    style="width: 0%"
-                                >
-                                    <span id="confidenceText">0%</span>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- Top Predictions -->
-                        <div class="mb-4">
-                            <h5>Top Disease Probabilities</h5>
-                            <div id="topPredictions"></div>
-                        </div>
-
-                        <!-- Sequence Statistics -->
-                        <div class="mb-4">
-                            <h5>Sequence Statistics</h5>
-                            <div class="row" id="sequenceStats"></div>
-                        </div>
-
-                        <!-- Medical Disclaimer -->
-                        <div class="alert alert-warning">
-                            <h6><i class="fas fa-exclamation-triangle"></i> Medical Disclaimer</h6>
-                            <p class="mb-0 small">
-                                This prediction is for <strong>educational and research purposes only</strong>. 
-                                It should not be used as a substitute for professional medical advice, diagnosis, or treatment. 
-                                Always seek the advice of your physician or other qualified health provider with any questions 
-                                you may have regarding a medical condition.
-                            </p>
-                        </div>
-
-                        <!-- Action Buttons -->
-                        <div class="d-grid gap-2 d-md-flex justify-content-md-center">
-                            <button class="btn btn-primary" onclick="downloadReport()">
-                                <i class="fas fa-download"></i> Download PDF Report
-                            </button>
-                            <button class="btn btn-secondary" onclick="resetForm()">
-                                <i class="fas fa-redo"></i> New Analysis
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- History Section -->
-        <div class="row justify-content-center mt-5" id="historySection" style="display: none;">
-            <div class="col-lg-10">
-                <div class="card shadow-lg">
-                    <div class="card-header bg-info text-white">
-                        <h4 class="mb-0"><i class="fas fa-history"></i> Prediction History</h4>
-                    </div>
-                    <div class="card-body">
-                        <div class="table-responsive">
-                            <table class="table table-striped table-hover">
-                                <thead>
-                                    <tr>
-                                        <th>Timestamp</th>
-                                        <th>Sequence Length</th>
-                                        <th>GC Content</th>
-                                        <th>Predicted Disease</th>
-                                        <th>Confidence</th>
-                                        <th>Risk Level</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="historyTableBody">
-                                </tbody>
-                            </table>
-                        </div>
-                        <button class="btn btn-secondary mt-3" onclick="hideHistory()">
-                            <i class="fas fa-arrow-left"></i> Back
+                <div class="card-body">
+                    <!-- Tabs -->
+                    <div class="tabs">
+                        <button class="tab-btn active" id="tabPasteBtn" onclick="switchTab('paste')">
+                            <i class="fas fa-keyboard"></i> Paste
+                        </button>
+                        <button class="tab-btn" id="tabUploadBtn" onclick="switchTab('upload')">
+                            <i class="fas fa-upload"></i> Upload
                         </button>
                     </div>
+
+                    <!-- Paste tab -->
+                    <div class="tab-pane active" id="tabPaste">
+                        <label class="field-label" for="seqInput">DNA Sequence (A, T, C, G)</label>
+                        <textarea id="seqInput" rows="9"
+                            placeholder="Paste your DNA sequence here…&#10;&#10;Example:&#10;ATCGATCGATCGATCGATCGATCGATCGATCG&#10;ATCGATCGATCGATCGATCGATCGATCGATCG&#10;ATCGATCGATCGATCGATCGATCGATCGATCG"
+                            oninput="updateCounter()"></textarea>
+                        <div class="char-counter"><span id="charCount">0</span> / min 50 nucleotides</div>
+                    </div>
+
+                    <!-- Upload tab -->
+                    <div class="tab-pane" id="tabUpload">
+                        <label class="field-label" for="fileInput">FASTA / TXT file</label>
+                        <input type="file" id="fileInput" accept=".fasta,.fa,.txt">
+                        <p style="font-size:0.75rem;color:var(--text-muted);margin-top:8px">
+                            Supports .fasta, .fa, .txt — max 16 MB
+                        </p>
+                    </div>
+
+                    <!-- Class Label selector -->
+                    <div style="margin-top:16px">
+                        <label class="field-label" for="classSelect">Organism Class (optional)</label>
+                        <select id="classSelect">
+                            <option value="Human">Human</option>
+                            <option value="Bacteria">Bacteria</option>
+                            <option value="Virus">Virus</option>
+                            <option value="Plant">Plant</option>
+                        </select>
+                    </div>
+
+                    <!-- Quick sample chips -->
+                    <div style="margin:16px 0 4px">
+                        <div class="section-title">Quick Samples</div>
+                        <div class="sample-chips">
+                            <button class="chip" onclick="loadSample('gc_high')"><i class="fas fa-circle-h" style="color:var(--danger)"></i> High GC</button>
+                            <button class="chip" onclick="loadSample('balanced')"><i class="fas fa-equals" style="color:var(--accent)"></i> Balanced</button>
+                            <button class="chip" onclick="loadSample('mutation')"><i class="fas fa-dna" style="color:var(--warning)"></i> With Mutation</button>
+                            <button class="chip" onclick="loadSample('at_rich')"><i class="fas fa-a" style="color:var(--accent3)"></i> AT-Rich</button>
+                        </div>
+                    </div>
+
+                    <!-- Error box -->
+                    <div class="error-box" id="errBox" style="display:none">
+                        <i class="fas fa-circle-exclamation"></i>
+                        <span id="errMsg">Error</span>
+                    </div>
+
+                    <!-- Loader -->
+                    <div class="loader" id="loader">
+                        <div class="dna-spinner"></div>
+                        <div class="loader-text">Analysing DNA sequence…</div>
+                    </div>
+
+                    <!-- Submit -->
+                    <button class="btn btn-primary" id="analyseBtn" onclick="submitPrediction()" style="margin-top:16px">
+                        <i class="fas fa-magnifying-glass-chart"></i> Analyse Sequence
+                    </button>
+                </div>
+            </div>
+
+            <!-- ── Results Card ── -->
+            <div id="resultsSection">
+                <div class="card" id="resultsCard">
+                    <!-- Risk Hero -->
+                    <div class="risk-hero">
+                        <div class="risk-label">Predicted Disease Risk</div>
+                        <div class="risk-value" id="riskValue">–</div>
+                        <div style="font-size:0.82rem;color:var(--text-secondary)" id="confText">–</div>
+                    </div>
+
+                    <div class="card-body">
+
+                        <!-- Confidence Bar -->
+                        <div class="confidence-wrap">
+                            <div class="confidence-label-row">
+                                <span>Confidence</span>
+                                <span id="confPct">0%</span>
+                            </div>
+                            <div class="progress-track">
+                                <div class="progress-fill" id="confBar" style="width:0%"></div>
+                            </div>
+                        </div>
+
+                        <!-- Probability Bars -->
+                        <div class="section-title" style="margin-top:20px">Risk Probabilities</div>
+                        <div class="prob-list" id="probList"></div>
+
+                        <!-- Nucleotide chart -->
+                        <div class="section-title" style="margin-top:20px">Nucleotide Composition</div>
+                        <div class="nuc-bars" id="nucBars">
+                            <div class="nuc-col"><div class="nuc-bar A" id="barA" style="height:50%"></div><div class="nuc-label">A</div></div>
+                            <div class="nuc-col"><div class="nuc-bar T" id="barT" style="height:50%"></div><div class="nuc-label">T</div></div>
+                            <div class="nuc-col"><div class="nuc-bar C" id="barC" style="height:50%"></div><div class="nuc-label">C</div></div>
+                            <div class="nuc-col"><div class="nuc-bar G" id="barG" style="height:50%"></div><div class="nuc-label">G</div></div>
+                        </div>
+
+                        <!-- Stats Grid -->
+                        <div class="section-title" style="margin-top:20px">Sequence Statistics</div>
+                        <div class="stats-grid" id="statsGrid"></div>
+
+                        <!-- Disclaimer -->
+                        <div class="disclaimer">
+                            <i class="fas fa-triangle-exclamation"></i>
+                            <span>For <strong>educational and research purposes only</strong>. Not a substitute for professional medical advice, diagnosis, or treatment.</span>
+                        </div>
+
+                        <!-- Actions -->
+                        <div style="display:flex;gap:10px;margin-top:16px">
+                            <button class="btn btn-outline btn-sm" onclick="downloadReport()">
+                                <i class="fas fa-file-pdf"></i> PDF Report
+                            </button>
+                            <button class="btn btn-outline btn-sm" onclick="resetUI()">
+                                <i class="fas fa-rotate-left"></i> Reset
+                            </button>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
-    </main>
+    </div>
 
-    <!-- Footer -->
-    <footer class="bg-dark text-white text-center py-4 mt-5">
-        <div class="container">
-            <p class="mb-0">
-                <i class="fas fa-dna"></i> DNA Disease Prediction System | 
-                Powered by Machine Learning | 
-                &copy; 2024
-            </p>
+    <!-- ── History Section ──────────────────────────────────────────────── -->
+    <div id="historySection">
+        <div class="card">
+            <div class="card-header">
+                <div class="icon"><i class="fas fa-clock-rotate-left"></i></div>
+                <span>Prediction History</span>
+                <button class="btn btn-outline btn-sm" onclick="showSection('analysis')" style="margin-left:auto">
+                    <i class="fas fa-arrow-left"></i> Back
+                </button>
+            </div>
+            <div class="card-body">
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Time</th>
+                                <th>Length</th>
+                                <th>GC%</th>
+                                <th>Organism</th>
+                                <th>Risk Level</th>
+                                <th>Confidence</th>
+                            </tr>
+                        </thead>
+                        <tbody id="historyBody"></tbody>
+                    </table>
+                </div>
+                <div id="historyEmpty" style="display:none;text-align:center;padding:32px;color:var(--text-muted)">
+                    <i class="fas fa-database" style="font-size:2rem;margin-bottom:8px;display:block"></i>
+                    No predictions yet. Analyse a sequence to get started.
+                </div>
+            </div>
         </div>
-    </footer>
+    </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</div><!-- end main-wrap -->
+
+<footer>
+    <i class="fas fa-dna" style="color:var(--accent)"></i>
+    <span>GenomIQ</span> — DNA Disease Risk Classifier &nbsp;·&nbsp;
+    Ensemble: XGBoost + LightGBM &nbsp;·&nbsp;
+    <span>&copy; 2025</span>
+</footer>
+
+</div><!-- end content -->
+
+<script>
+/* ─── State ───────────────────────────────────────────────────────────── */
+let lastResult = null;
+let currentTab = 'paste';
+
+/* ─── Boot ────────────────────────────────────────────────────────────── */
+document.addEventListener('DOMContentLoaded', () => {
+    loadModelInfo();
+});
+
+async function loadModelInfo() {
+    try {
+        const res = await fetch('/model-info');
+        const data = await res.json();
+        if (data.accuracy) {
+            const acc = (data.accuracy * 100).toFixed(1) + '%';
+            const cv  = (data.cv_mean  * 100).toFixed(1) + '%';
+            document.getElementById('m-acc').textContent = acc;
+            document.getElementById('m-cv').textContent  = cv;
+            document.getElementById('hero-acc').textContent = acc;
+            if (data.classes?.length)
+                document.getElementById('m-classes').textContent = data.classes.join(' · ');
+        }
+    } catch {}
+}
+
+/* ─── Tabs ────────────────────────────────────────────────────────────── */
+function switchTab(tab) {
+    currentTab = tab;
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+    document.getElementById(`tab${tab.charAt(0).toUpperCase()+tab.slice(1)}Btn`).classList.add('active');
+    document.getElementById(`tab${tab.charAt(0).toUpperCase()+tab.slice(1)}`).classList.add('active');
+}
+
+/* ─── Counter ─────────────────────────────────────────────────────────── */
+function updateCounter() {
+    const val = document.getElementById('seqInput').value.replace(/\s/g, '').toUpperCase();
+    document.getElementById('charCount').textContent = val.length;
+}
+
+/* ─── Samples ─────────────────────────────────────────────────────────── */
+const SAMPLES = {
+    gc_high:  'GCGCGCGCGGCCGGCGCGGCGCGCGGCGCGCGCGCGGCGCGCGCGGCGCGCGCGCGCGCGCGGCGCGCGCGGCGGCGCGCGCGCGCGCGCGCGCGCG',
+    balanced: 'ATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCG',
+    mutation: 'ATCGATCGATCGATCGATCNKCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCG',
+    at_rich:  'ATATATATATAATTATATAATATATTATATATATATAATATATATATATAATATATAATATATATATAATATATATATATAATATATAATATATATAATA',
+};
+
+function loadSample(type) {
+    switchTab('paste');
+    const seq = SAMPLES[type] || SAMPLES.balanced;
+    document.getElementById('seqInput').value = seq.replace(/\s/g, '');
+    updateCounter();
+    clearError();
+}
+
+/* ─── Error ───────────────────────────────────────────────────────────── */
+function showError(msg) {
+    const box = document.getElementById('errBox');
+    document.getElementById('errMsg').textContent = msg;
+    box.style.display = 'flex';
+}
+
+function clearError() { document.getElementById('errBox').style.display = 'none'; }
+
+/* ─── Submit ──────────────────────────────────────────────────────────── */
+async function submitPrediction() {
+    clearError();
+    const btn = document.getElementById('analyseBtn');
+    const loader = document.getElementById('loader');
+
+    let sequence = '';
+    let formData = new FormData();
+
+    if (currentTab === 'paste') {
+        sequence = document.getElementById('seqInput').value.trim();
+        if (!sequence) { showError('Please paste a DNA sequence.'); return; }
+        formData.append('sequence', sequence);
+    } else {
+        const file = document.getElementById('fileInput').files[0];
+        if (!file) { showError('Please select a file.'); return; }
+        formData.append('file', file);
+    }
+
+    formData.append('class_label', document.getElementById('classSelect').value);
+
+    btn.disabled = true;
+    loader.classList.add('active');
+    hideResults();
+
+    try {
+        const res = await fetch('/predict', { method: 'POST', body: formData });
+        const data = await res.json();
+
+        if (!res.ok || data.error) {
+            showError(data.error || 'Prediction failed.');
+            return;
+        }
+
+        lastResult = data;
+        renderResults(data);
+        showResults();
+    } catch (e) {
+        showError('Network error: ' + e.message);
+    } finally {
+        btn.disabled = false;
+        loader.classList.remove('active');
+    }
+}
+
+/* ─── Render Results ──────────────────────────────────────────────────── */
+function renderResults(data) {
+    const risk = data.disease || data.risk_level || 'Unknown';
+    const conf = (data.confidence * 100).toFixed(1);
+
+    // Risk value
+    const rv = document.getElementById('riskValue');
+    rv.textContent = risk;
+    rv.className = `risk-value ${risk}`;
+
+    document.getElementById('confText').textContent = `Confidence: ${conf}%`;
+    document.getElementById('confPct').textContent  = `${conf}%`;
+
+    // Confidence bar (delayed for animation)
+    setTimeout(() => {
+        document.getElementById('confBar').style.width = conf + '%';
+    }, 100);
+
+    // Probability bars
+    const probList = document.getElementById('probList');
+    probList.innerHTML = '';
+    const probs = data.probabilities || {};
+    Object.entries(probs).sort((a,b) => b[1]-a[1]).forEach(([cls, p]) => {
+        const pct = (p * 100).toFixed(1);
+        probList.innerHTML += `
+            <div class="prob-row">
+                <div class="prob-name">${cls}</div>
+                <div class="prob-bar-wrap">
+                    <div class="prob-bar ${cls}" style="width:0%" data-target="${pct}"></div>
+                </div>
+                <div class="prob-pct">${pct}%</div>
+            </div>`;
+    });
+    setTimeout(() => {
+        document.querySelectorAll('.prob-bar[data-target]').forEach(el => {
+            el.style.width = el.dataset.target + '%';
+        });
+    }, 120);
+
+    // Nucleotide bars
+    const stats = data.stats || {};
+    const total = Math.max(stats.length || 100, 1);
+    const nucData = {
+        A: (stats.a_count||0), T: (stats.t_count||0),
+        C: (stats.c_count||0), G: (stats.g_count||0)
+    };
+    const maxNuc = Math.max(...Object.values(nucData), 1);
+    setTimeout(() => {
+        ['A','T','C','G'].forEach(n => {
+            document.getElementById('bar'+n).style.height = ((nucData[n]/maxNuc)*100) + '%';
+        });
+    }, 150);
+
+    // Stats grid
+    const grid = document.getElementById('statsGrid');
+    grid.innerHTML = `
+        <div class="stat-card">
+            <div class="stat-card-label">Sequence Length</div>
+            <div class="stat-card-val">${(stats.length||0).toLocaleString()} nt</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-card-label">GC Content</div>
+            <div class="stat-card-val">${(stats.gc_content||0).toFixed(1)}%</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-card-label">AT Content</div>
+            <div class="stat-card-val">${(stats.at_content||0).toFixed(1)}%</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-card-label">Model Accuracy</div>
+            <div class="stat-card-val">${((data.accuracy||0)*100).toFixed(1)}%</div>
+        </div>
+    `;
+}
+
+/* ─── Show/Hide ───────────────────────────────────────────────────────── */
+function showResults() {
+    const rs = document.getElementById('resultsSection');
+    rs.style.display = 'block';
+    rs.classList.add('fade-in');
+}
+
+function hideResults() {
+    document.getElementById('resultsSection').style.display = 'none';
+}
+
+function resetUI() {
+    document.getElementById('seqInput').value = '';
+    document.getElementById('charCount').textContent = '0';
+    clearError();
+    hideResults();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function showSection(name) {
+    document.getElementById('analysisSection').style.display = name === 'analysis' ? 'block' : 'none';
+    document.getElementById('historySection').style.display  = name === 'history'  ? 'block' : 'none';
+    if (name === 'history') loadHistory();
+}
+
+/* ─── History ─────────────────────────────────────────────────────────── */
+async function loadHistory() {
+    try {
+        const res  = await fetch('/history');
+        const data = await res.json();
+        const body = document.getElementById('historyBody');
+        const empty= document.getElementById('historyEmpty');
+
+        if (!data.length) { body.innerHTML = ''; empty.style.display = 'block'; return; }
+        empty.style.display = 'none';
+
+        body.innerHTML = data.map(r => {
+            const dt = new Date(r.timestamp).toLocaleString();
+            const risk = r.risk_level || r.predicted_disease || '–';
+            const conf = ((r.confidence||0)*100).toFixed(1) + '%';
+            return `<tr>
+                <td>${dt}</td>
+                <td>${r.sequence_length} nt</td>
+                <td>${(r.gc_content||0).toFixed(1)}%</td>
+                <td>${r.class_label || '–'}</td>
+                <td><span class="risk-chip ${risk}">${risk}</span></td>
+                <td>${conf}</td>
+            </tr>`;
+        }).join('');
+    } catch (e) {
+        console.error('History load error:', e);
+    }
+}
+
+/* ─── Download Report ─────────────────────────────────────────────────── */
+async function downloadReport() {
+    if (!lastResult) { showError('No prediction to download.'); return; }
+    try {
+        const res = await fetch('/download-report', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(lastResult)
+        });
+        if (!res.ok) { showError('PDF generation failed.'); return; }
+        const blob = await res.blob();
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a');
+        a.href = url;
+        a.download = `dna_risk_report_${Date.now()}.pdf`;
+        a.click();
+        URL.revokeObjectURL(url);
+    } catch (e) {
+        showError('Download error: ' + e.message);
+    }
+}
+</script>
 </body>
 </html>
